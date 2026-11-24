@@ -71,7 +71,7 @@ def _to_int(raw: str) -> int | None:
         n = float(t[:-1]) * 1000 if t.endswith("k") else float(t)
     except ValueError:
         return None
-    return int(n) if 1 <= n <= 5_000_000 else None
+    return int(n) if 5 <= n <= 5_000_000 else None
 
 
 def _name_pattern(company_name: str) -> re.Pattern | None:
