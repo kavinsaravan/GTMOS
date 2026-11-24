@@ -81,6 +81,8 @@ def test_enrich_confirms_domain_only_from_search_results(monkeypatch):
     "Leaked memo: Acme Corp lays off 300 employees, mostly in engineering.",
     "In 2008, with 10 employees, Acme Corp released its first product.",
     "Acme Corp was founded with 12 employees in a garage.",
+    "Acme Corp's total headcount has grown 26.1% from 277 employees in 2023 to 350 in 2026.",
+    "Whether a company has 50 employees or 50,000, Acme Corp grows with you.",
     "Acme Corp is hiring and has 40 open roles for staff members.",
 ])
 def test_historical_or_layoff_sentences_are_not_current_headcount(content):

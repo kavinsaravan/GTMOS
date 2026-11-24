@@ -37,7 +37,9 @@ _PHRASE = re.compile(rf"(?:employs|headcount of|workforce of|company size[: ]+)\
 _NOT_CURRENT = re.compile(
     r"\b(lay(?:s|ing)?\s?offs?|laid\s+off|cut(?:s|ting)?|reduc\w+|downsiz\w+|fired|eliminat\w+|"
     r"redundan\w+|founded|started\s+with|began\s+with|originally|initially|formerly|used\s+to|"
-    r"grew\s+from|first|early\s+days|at\s+launch|hired|hiring|open\s+roles?|openings?)\b", re.I)
+    r"grew\s+from|grown|growth|from\s+[\d,.]+\s?[kK]?\s+(?:employees|to)|whether|first|early\s+days|"
+    r"at\s+launch|hired|hiring|open\s+roles?|openings?)\b", re.I)
+_HYPOTHETICAL = re.compile(r"\bor\s+\d", re.I)   # "whether a company has 50 employees or 50,000"
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 _SPLIT = re.compile(r"(?<=[.!?])\s+|\n+|\s\|\s|•")
 
@@ -81,7 +83,7 @@ def _name_pattern(company_name: str) -> re.Pattern | None:
 
 
 def is_current_statement(sentence: str) -> bool:
-    if _NOT_CURRENT.search(sentence):
+    if _NOT_CURRENT.search(sentence) or _HYPOTHETICAL.search(sentence):
         return False
     years = [int(m.group(0)) for m in _YEAR.finditer(sentence)]
     return not years or max(years) >= date.today().year - 1   # stale dated claims are not current
