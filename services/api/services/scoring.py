@@ -12,7 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 MAX_POINTS = {"industry": 30, "size": 25, "signals": 30, "geo_exclusions": 15}
-SIGNAL_POINTS_EACH = 15  # two verified signals reach the 30-point cap
+SIGNAL_POINTS_EACH = 15  # two strong signals reach the 30-point cap
+WEAK_SIGNAL_POINTS = 7   # signal shown only on an aggregator / job-board / list page
 TIER_A, TIER_B = 80, 60
 
 
@@ -23,7 +24,8 @@ class Facts:
     employees_source: str | None = None     # "evidence" (quote verified) | "estimate" (model prior)
     geography_match: str = "unknown"        # match | unknown | mismatch
     geography_required: bool = True         # False when the campaign names no geography
-    verified_signals: list[str] = field(default_factory=list)  # ICP signals with verified evidence
+    verified_signals: list[str] = field(default_factory=list)  # signals verified on a primary/third-party source
+    weak_signals: list[str] = field(default_factory=list)      # signals verified only on aggregator/list pages
 
 
 def tier_for(score: int) -> str:
@@ -51,11 +53,17 @@ def _size(f: Facts, lo: int, hi: int) -> tuple[int, str]:
 
 
 def _signals(f: Facts) -> tuple[int, str]:
-    n = len(set(f.verified_signals))
-    pts = min(MAX_POINTS["signals"], n * SIGNAL_POINTS_EACH)
-    if not n:
+    strong = set(f.verified_signals)
+    weak = set(f.weak_signals) - strong
+    if not strong and not weak:
         return 0, "No buying signal with a verifiable source, no signal points"
-    return pts, f"{n} buying signal(s) backed by cited sources: " + "; ".join(sorted(set(f.verified_signals)))
+    pts = min(MAX_POINTS["signals"], len(strong) * SIGNAL_POINTS_EACH + len(weak) * WEAK_SIGNAL_POINTS)
+    bits = []
+    if strong:
+        bits.append(f"{len(strong)} backed by cited sources ({'; '.join(sorted(strong))})")
+    if weak:
+        bits.append(f"{len(weak)} seen only on job-board/list pages, reduced credit ({'; '.join(sorted(weak))})")
+    return pts, "Buying signals: " + ", ".join(bits)
 
 
 def _geo(f: Facts) -> tuple[int, str]:

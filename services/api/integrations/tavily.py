@@ -31,17 +31,21 @@ def _http_post(url: str, headers: dict, body: dict, timeout: float) -> dict:
         return json.loads(resp.read())
 
 
-def search(query: str, *, max_results: int = 6, timeout: float = 8) -> list[dict]:
+def search(query: str, *, max_results: int = 6, timeout: float = 8,
+           include_domains: list[str] | None = None) -> list[dict]:
     """Return [{title, url, content}] for public http(s) pages only."""
     key = secrets.provider_key("TAVILY_API_KEY")
     if not key:
         raise ApiError(503, "search_not_configured", "Tavily is not configured (TAVILY_API_KEY missing)")
+    payload = {"query": query, "search_depth": "basic", "max_results": max_results,
+               "include_answer": False, "include_raw_content": False}
+    if include_domains:
+        payload["include_domains"] = include_domains
     try:
         data = _http_post(
             TAVILY_URL,
             {"authorization": f"Bearer {key}", "content-type": "application/json"},
-            {"query": query, "search_depth": "basic", "max_results": max_results,
-             "include_answer": False, "include_raw_content": False},
+            payload,
             timeout,
         )
     except urllib.error.HTTPError as exc:

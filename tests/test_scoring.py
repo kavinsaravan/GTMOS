@@ -70,3 +70,17 @@ def test_tier_boundaries(n, t):
 def test_rationale_matches_components():
     r = score(full(verified_signals=["Hiring platform engineers"]), RANGE)
     assert "Hiring platform engineers" in r["fit_reason"] and "signals: 15/30" in r["fit_reason"]
+
+
+def test_weak_signals_earn_reduced_credit():
+    weak = score(full(verified_signals=[], weak_signals=["a"]), RANGE)["score_breakdown"]["signals"]
+    assert weak["points"] == 7 and "job-board" in weak["reason"]
+    mixed = score(full(verified_signals=["a"], weak_signals=["b"]), RANGE)["score_breakdown"]["signals"]
+    assert mixed["points"] == 22
+    assert score(full(verified_signals=[], weak_signals=["a", "b", "c", "d", "e"]), RANGE
+                 )["score_breakdown"]["signals"]["points"] == 30  # still capped
+
+
+def test_signal_counted_strong_is_not_double_counted_as_weak():
+    r = score(full(verified_signals=["a"], weak_signals=["a"]), RANGE)
+    assert r["score_breakdown"]["signals"]["points"] == 15
