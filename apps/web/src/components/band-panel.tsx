@@ -12,6 +12,7 @@ const TONE: Record<OrchStatus, "neutral" | "info" | "good" | "bad" | "warn"> = {
   reviewing: "info",
   awaiting_approval: "good",
   failed: "bad",
+  abstained: "warn",
 };
 const LABEL: Record<OrchStatus, string> = {
   queued: "Queued",
@@ -20,6 +21,7 @@ const LABEL: Record<OrchStatus, string> = {
   reviewing: "Reviewing",
   awaiting_approval: "Awaiting human approval",
   failed: "Failed",
+  abstained: "Abstained: not contacting",
 };
 
 /** Band multi-agent runs for a campaign. The trace is what the agents recorded as they sent and

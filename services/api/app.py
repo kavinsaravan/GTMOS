@@ -160,6 +160,14 @@ def draft_lead(ctx: Ctx):
                     lambda: outreach.generate(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"]))
 
 
+def resolve_lead(ctx: Ctx):
+    from services import resolution
+
+    campaign = _campaign_or_404(ctx["params"]["id"])
+    return _metered("resolution", ctx, campaign,
+                    lambda: resolution.resolve(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"]))
+
+
 def start_orchestration(ctx: Ctx):
     from services import orchestration
 
@@ -278,6 +286,8 @@ ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
      enrich_lead, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/leads/(?P<lead>[A-Za-z0-9_\-]{{1,64}})/draft$"),
      draft_lead, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/leads/(?P<lead>[A-Za-z0-9_\-]{{1,64}})/resolve$"),
+     resolve_lead, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/drafts$"), list_drafts, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}$"), get_draft, True),
     ("PATCH", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}$"), edit_draft, True),

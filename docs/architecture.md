@@ -35,12 +35,19 @@ successful operation is logged as `billing.charge_failed` and does not fail the 
 
 ## Band orchestration
 
-Run status: `queued → planning → researching → reviewing → awaiting_approval | failed`. State changes are
+Run status: `queued → planning → researching → reviewing → awaiting_approval | failed | abstained`. State changes are
 conditional DynamoDB updates (single claim winner; no writes after a run finishes). Each agent is its own process
 with its own Band websocket. A message carries `[gtmos run=… campaign=… lead=…]`, which links the Band message to
 the GTMOS run. An agent only acts on a message from its expected upstream agent, dedupes by message id, and always
 replies or calls `no_reply` so Band does not post a turn error. Lambda cannot hold a websocket, so the agents are
 local processes that call the API for the real work.
+
+## Uncertainty resolution
+
+`services/resolution.py` handles `verify_first` leads. It rebuilds the decision row from DynamoDB, searches for the
+missing fact (at most two targeted Tavily calls), appends verbatim-quoted evidence or marks the domain verified, and
+re-runs `graph.decide`. Outcome `resolved` or `abstain`, with a known/uncertain/needed brief. Metered as `resolution`
+(2 credits); max 2 attempts per lead. The Researcher agent runs it first; `abstain` ends the run as `abstained`.
 
 ## Not built
 

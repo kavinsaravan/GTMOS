@@ -4,7 +4,8 @@ The Lambda cannot host a Band websocket listener, so the three agents (Planner, 
 Reviewer) run as separate long-lived processes (see /agents). This module only stores the run and
 the trace those agents report: each trace entry carries the Band room id and the Band message id
 of a real @mention handoff, so it can be checked against the room transcript on Band.
-Agents never approve or send anything: a finished run ends at `awaiting_approval` (human review).
+Agents never approve or send anything: a finished run ends at `awaiting_approval` (human review) or, when a
+lead's missing fact cannot be found, `abstained` (no contact, no draft).
 """
 from __future__ import annotations
 
@@ -13,8 +14,10 @@ from persistence import dynamo
 from services import audit
 
 ROLES = ("planner", "researcher", "reviewer")
-KINDS = ("claimed", "room_created", "handoff_sent", "message_received", "work_done", "work_failed", "completed")
-STATUSES = ("queued", "planning", "researching", "reviewing", "awaiting_approval", "failed")
+KINDS = ("claimed", "room_created", "handoff_sent", "message_received", "work_done", "work_failed", "completed",
+         "uncertainty_resolved", "abstained")
+STATUSES = ("queued", "planning", "researching", "reviewing", "awaiting_approval", "failed",
+            "abstained")
 ACTIVE = ("planning", "researching", "reviewing")
 
 
@@ -92,7 +95,7 @@ def add_event(org_id: str, campaign_id: str, run_id: str, body: dict, operation_
         fields["band_room_id"] = event["band_room_id"]
     if body.get("draft_id"):
         fields["draft_id"] = str(body["draft_id"])[:80]
-    if status and status != run["status"] and run["status"] in ("failed", "awaiting_approval"):
+    if status and status != run["status"] and run["status"] in ("failed", "awaiting_approval", "abstained"):
         raise ApiError(409, "run_finished", "Run is already finished")
     dynamo.transition_orch(org_id, campaign_id, run_id, new_status=status, event=event, fields=fields)
     audit.record(org_id, campaign_id, f"agent:{agent}", f"orchestration.{kind}", run_id,

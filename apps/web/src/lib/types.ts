@@ -179,7 +179,7 @@ export interface Billing {
   error?: string;
 }
 
-export type OrchStatus = "queued" | "planning" | "researching" | "reviewing" | "awaiting_approval" | "failed";
+export type OrchStatus = "queued" | "planning" | "researching" | "reviewing" | "awaiting_approval" | "failed" | "abstained";
 
 export interface OrchEvent {
   agent: "planner" | "researcher" | "reviewer";
@@ -211,4 +211,15 @@ export interface AuditEvent {
   occurred_at: string;
   details: Record<string, unknown>;
   operation_id: string;
+}
+
+export interface Resolution {
+  lead_id: string;
+  outcome: "resolved" | "abstain";
+  before: Recommendation;
+  after: Recommendation;
+  attempts: number;
+  reasons: string[];
+  steps: { fact: string; found: boolean; detail: string }[];
+  brief: { known: string[]; uncertain: string[]; would_make_actionable: string[] };
 }

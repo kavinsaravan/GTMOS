@@ -23,7 +23,7 @@ from services import audit
 
 log = logging.getLogger("gtmos.billing")
 
-COSTS: dict[str, int] = {"discovery": 1, "enrichment": 3, "graph_query": 1, "draft": 2}
+COSTS: dict[str, int] = {"discovery": 1, "enrichment": 3, "graph_query": 1, "draft": 2, "resolution": 2}
 EVENT_NAMES: dict[str, str] = {k: f"gtmos_{k}" for k in COSTS}
 INITIAL_CREDITS = int(os.environ.get("FLEXPRICE_INITIAL_CREDITS", "100"))
 

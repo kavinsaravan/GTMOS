@@ -127,7 +127,7 @@ def test_replayed_idempotency_key_is_not_charged_twice(campaign, stub_graph, mon
 def test_costs_match_the_prd():
     from services import billing
 
-    assert billing.COSTS == {"discovery": 1, "enrichment": 3, "graph_query": 1, "draft": 2}
+    assert billing.COSTS == {"discovery": 1, "enrichment": 3, "graph_query": 1, "draft": 2, "resolution": 2}
 
 
 def test_flexprice_url_must_be_flexprice_https(monkeypatch):

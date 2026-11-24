@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { Badge, Card, Empty, Notice, Spinner, tierTone } from "@/components/ui";
 import { DraftPanel } from "@/components/draft-panel";
 import { LeadGraph } from "@/components/lead-graph";
+import { ResolvePanel } from "@/components/resolve-panel";
 import { errorText, useApi } from "@/lib/api";
 import { RECOMMENDATION, SOURCE_TYPE, host } from "@/lib/labels";
 import type { Decisions, Draft, Lead } from "@/lib/types";
@@ -133,6 +134,9 @@ export default function LeadDetail() {
                       {host(dec.hook.url)} <ExternalLink className="size-3" aria-hidden />
                     </a>
                   </div>
+                )}
+                {dec.recommendation === "verify_first" && (
+                  <ResolvePanel campaignId={id} leadId={lead.id} onChange={() => void leads.reload()} />
                 )}
                 {dec.rivals.length > 0 && (
                   <p className="text-stone-600">

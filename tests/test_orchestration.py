@@ -74,6 +74,15 @@ def test_finished_run_cannot_be_reopened(run):
     assert status == 409 and body["error"]["code"] == "run_finished"
 
 
+def test_abstained_run_is_terminal(run):
+    cid, _, r = run
+    status, body = ev(cid, r["id"], agent="researcher", kind="abstained", status="abstained")
+    assert status == 201 and body["data"]["status"] == "abstained"
+    assert ev(cid, r["id"], agent="researcher", kind="uncertainty_resolved")[0] == 201   # trace-only events still fine
+    status, body = ev(cid, r["id"], agent="reviewer", kind="completed", status="awaiting_approval")
+    assert status == 409 and body["error"]["code"] == "run_finished"
+
+
 def test_requires_auth(run):
     cid, _, r = run
     assert call("GET", "/api/orchestrations/queued", token=None)[0] == 401
