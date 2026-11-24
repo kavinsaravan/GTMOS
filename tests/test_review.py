@@ -170,3 +170,135 @@ def test_storage_keys_are_not_leaked(pending):
     _, _, d = pending
     assert not {"PK", "SK", "GSI1PK", "GSI1SK"} & set(d)
     assert dynamo.draft_sk("lead_x", 3) == "DRAFT#lead_x#0003"
+
+
+# ------------------------------------------------------------------ Gmail draft after approval
+import base64
+import email as email_lib
+import io
+import json
+import urllib.error
+
+from integrations import gmail
+
+
+@pytest.fixture
+def gm(monkeypatch):
+    state = {"calls": [], "fail_token": None, "fail_draft": None}
+    for k in gmail.KEYS:
+        monkeypatch.setenv(k, f"{k.lower()}-secret")
+
+    def fake(url, headers, data, timeout):
+        state["calls"].append((url, headers, data))
+        if url == gmail.TOKEN_URL:
+            if state["fail_token"]:
+                raise state["fail_token"]
+            return {"access_token": "ya29.token"}
+        if state["fail_draft"]:
+            raise state["fail_draft"]
+        return {"id": "r-123", "message": {"id": "m1"}}
+
+    monkeypatch.setattr(gmail, "_http_post", fake)
+    return state
+
+
+def with_contact(cid, lead, addr="ann@acme.com"):
+    dynamo.update_lead("demo", cid, lead["domain"], {"contacts": [
+        {"email": addr, "first_name": "Ann", "last_name": "Lee", "position": "VP Platform",
+         "verification_status": "valid", "sources": []}]})
+
+
+def herr(code):
+    return urllib.error.HTTPError("https://x", code, "err", {}, io.BytesIO(b"{}"))
+
+
+def test_approve_without_gmail_is_truthfully_not_connected(pending):
+    cid, lead, _ = pending
+    with_contact(cid, lead)
+    d = make_draft(cid, lead)[1]["data"]
+    out = act(cid, d["id"], "approve")[1]["data"]
+    assert out["status"] == "approved" and out["gmail"]["status"] == "not_connected"
+    assert "draft_id" not in out["gmail"]
+
+
+def test_approve_without_recipient_email_is_no_recipient_and_never_calls_gmail(pending, gm):
+    cid, _, d = pending                          # persona-only recipient: no email
+    out = act(cid, d["id"], "approve")[1]["data"]
+    assert out["gmail"]["status"] == "no_recipient" and gm["calls"] == []
+
+
+def test_approve_creates_gmail_draft_with_stored_recipient_only(table, ow, gm):  # noqa: F811
+    cid = approved_campaign()
+    lead = lead_for(cid)
+    with_contact(cid, lead)
+    d = make_draft(cid, lead)[1]["data"]
+    out = act(cid, d["id"], "approve")[1]["data"]
+    assert out["gmail"]["status"] == "created" and out["gmail"]["draft_id"] == "r-123"
+    token_call, draft_call = gm["calls"]
+    assert b"refresh_token=" in token_call[2] and draft_call[1]["authorization"] == "Bearer ya29.token"
+    assert draft_call[0].endswith("/drafts") and "/send" not in draft_call[0]
+    raw = json.loads(draft_call[2])["message"]["raw"]
+    msg = email_lib.message_from_bytes(base64.urlsafe_b64decode(raw))
+    assert msg["To"] == "ann@acme.com" and msg["Subject"] == d["subject"]
+    assert "Acme is hiring five platform engineers" in msg.get_payload(decode=True).decode()
+    assert "draft.gmail_created" in actions(cid)
+    ev = [e for e in call("GET", f"/api/campaigns/{cid}/events")[1]["data"] if e["action"] == "draft.gmail_created"]
+    assert "ann@acme.com" not in json.dumps(ev[0]["details"])
+
+
+def test_approve_twice_creates_only_one_gmail_draft(table, ow, gm):  # noqa: F811
+    cid = approved_campaign()
+    lead = lead_for(cid)
+    with_contact(cid, lead)
+    d = make_draft(cid, lead)[1]["data"]
+    act(cid, d["id"], "approve")
+    again = act(cid, d["id"], "approve")[1]["data"]
+    assert again["gmail"]["draft_id"] == "r-123"
+    assert sum(1 for c in gm["calls"] if c[0] == gmail.DRAFTS_URL) == 1
+
+
+def test_gmail_failure_keeps_approval_and_retry_succeeds(table, ow, gm):  # noqa: F811
+    cid = approved_campaign()
+    lead = lead_for(cid)
+    with_contact(cid, lead)
+    d = make_draft(cid, lead)[1]["data"]
+    gm["fail_draft"] = herr(500)
+    out = act(cid, d["id"], "approve")[1]["data"]
+    assert out["status"] == "approved" and out["gmail"] == {**out["gmail"], "status": "failed",
+                                                          "error_code": "mail_unavailable"}
+    assert "draft.gmail_failed" in actions(cid)
+    gm["fail_draft"] = None
+    retried = act(cid, d["id"], "approve")[1]["data"]
+    assert retried["gmail"]["status"] == "created"
+
+
+@pytest.mark.parametrize("fail,code", [("token400", "mail_not_configured"), ("draft403", "mail_not_configured"),
+                                       ("draft429", "mail_rate_limited"), ("token500", "mail_unavailable")])
+def test_gmail_error_mapping(gm, fail, code):
+    if fail.startswith("token"):
+        gm["fail_token"] = herr(int(fail[5:]))
+    else:
+        gm["fail_draft"] = herr(int(fail[5:]))
+    with pytest.raises(Exception) as e:
+        gmail.create_draft("a@b.io", "s", "b")
+    assert e.value.code == code and "secret" not in e.value.message
+
+
+def test_rejected_draft_never_reaches_gmail(table, ow, gm):  # noqa: F811
+    cid = approved_campaign()
+    lead = lead_for(cid)
+    with_contact(cid, lead)
+    d = make_draft(cid, lead)[1]["data"]
+    act(cid, d["id"], "reject", {"reason": "no"})
+    assert act(cid, d["id"], "approve")[0] == 409 and gm["calls"] == []
+
+
+def test_header_injection_in_subject_cannot_add_headers():
+    raw = gmail.build_raw("a@b.io", "Hello\r\nBcc: evil@x.io", "body")
+    msg = email_lib.message_from_bytes(base64.urlsafe_b64decode(raw))
+    assert msg["Bcc"] is None and msg["Subject"] == "Hello Bcc: evil@x.io"
+
+
+def test_module_has_no_send_path():
+    src = open(gmail.__file__).read()
+    assert "/messages/send" not in src and "drafts/send" not in src and "def send" not in src

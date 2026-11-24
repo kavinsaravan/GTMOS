@@ -3,17 +3,21 @@
 State machine (per draft version):
     pending_review -> approved | rejected | superseded
     blocked        -> rejected | superseded        (Reviewer found too little supported content)
-    approved       -> (dispatch; see services/dispatch.py)
+    approved       -> a Gmail *draft* is created in the connected mailbox (never sent)
 
 * Editing never mutates a version: it creates a new, higher version (full history kept).
 * Every transition is a conditional write, so retries and double clicks are safe.
 * Approval records who approved and when. Rejection is terminal and blocks dispatch.
-* Nothing here sends mail.
+* Nothing here sends mail. After approval a Gmail draft is created if Gmail is connected and the
+  recipient address came from the enrichment provider; otherwise the draft records a truthful
+  `not_connected` / `no_recipient` / `failed` state. Leads stay "Matched": only a recorded dispatch
+  may move a lead to Contacted.
 """
 from __future__ import annotations
 
 from pydantic import ValidationError
 
+from integrations import gmail
 from models.common import ApiError, new_id
 from models.draft import DraftEdit
 from persistence import dynamo
@@ -41,8 +45,8 @@ def get(org_id: str, cid: str, draft_id: str) -> dict:
 
 def approve(org_id: str, cid: str, draft_id: str, operation_id: str, actor: str = ACTOR) -> dict:
     d = _find(org_id, cid, draft_id)
-    if d["status"] == "approved":
-        return dynamo.public(d)                      # idempotent retry
+    if d["status"] == "approved":                    # idempotent retry; also retries a failed Gmail draft
+        return dynamo.public(_ensure_gmail_draft(org_id, cid, d, operation_id))
     if d["status"] != "pending_review":
         raise ApiError(409, "invalid_transition", f"A {d['status']} draft cannot be approved")
     if not _is_latest(org_id, d):
@@ -54,7 +58,31 @@ def approve(org_id: str, cid: str, draft_id: str, operation_id: str, actor: str 
         return _after_lost_race(org_id, cid, draft_id, "approved")
     audit.record(org_id, cid, actor, "draft.approved", d["id"],
                  {"lead_id": d["lead_id"], "version": int(d["version"])}, operation_id)
-    return dynamo.public(_find(org_id, cid, draft_id))
+    return dynamo.public(_ensure_gmail_draft(org_id, cid, _find(org_id, cid, draft_id), operation_id))
+
+
+def _ensure_gmail_draft(org_id: str, cid: str, d: dict, operation_id: str) -> dict:
+    """Create the Gmail draft for an approved draft unless it already exists. Never sends."""
+    if (d.get("gmail") or {}).get("status") in ("created", "no_recipient"):
+        return d
+    to = (d.get("recipient") or {}).get("email")
+    state: dict = {"attempted_at": dynamo.now_iso()}
+    if not to:
+        state["status"] = "no_recipient"
+    elif not gmail.configured():
+        state["status"] = "not_connected"
+    else:
+        try:
+            state["draft_id"] = gmail.create_draft(to, d["subject"], d["body"])
+            state["status"] = "created"
+        except ApiError as e:
+            state.update({"status": "failed", "error_code": e.code})
+    dynamo.set_draft_fields(org_id, cid, d["SK"], {"gmail": state}, only_if_status=("approved",))
+    if state["status"] in ("created", "failed"):
+        audit.record(org_id, cid, "system", f"draft.gmail_{state['status']}", d["id"],
+                     {"lead_id": d["lead_id"], "version": int(d["version"]),
+                      **({"error_code": state["error_code"]} if "error_code" in state else {})}, operation_id)
+    return _find(org_id, cid, d["id"])
 
 
 def reject(org_id: str, cid: str, draft_id: str, reason: str, operation_id: str, actor: str = ACTOR) -> dict:
