@@ -22,6 +22,7 @@ from services import audit, secrets
 ORG_ID = os.environ.get("ORG_ID", "demo")  # single-tenant demo; every write is still org-scoped
 MAX_BODY_BYTES = 64 * 1024
 ID_RE = r"(?P<id>[A-Za-z0-9_\-]{1,64})"
+DRAFT_RE = r"(?P<draft>[A-Za-z0-9_\-]{1,64})"
 
 Ctx = dict[str, Any]
 
@@ -136,6 +137,50 @@ def enrich_lead(ctx: Ctx):
     return enrichment.enrich(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"])
 
 
+def draft_lead(ctx: Ctx):
+    from services import outreach
+
+    campaign = _campaign_or_404(ctx["params"]["id"])
+    return outreach.generate(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"])
+
+
+def list_drafts(ctx: Ctx):
+    from services import outreach
+
+    _campaign_or_404(ctx["params"]["id"])
+    return outreach.list_drafts(ORG_ID, ctx["params"]["id"])
+
+
+def get_draft(ctx: Ctx):
+    from services import review
+
+    _campaign_or_404(ctx["params"]["id"])
+    return review.get(ORG_ID, ctx["params"]["id"], ctx["params"]["draft"])
+
+
+def edit_draft(ctx: Ctx):
+    from services import review
+
+    _campaign_or_404(ctx["params"]["id"])
+    return review.edit(ORG_ID, ctx["params"]["id"], ctx["params"]["draft"], ctx["body"], ctx["operation_id"])
+
+
+def approve_draft(ctx: Ctx):
+    from services import review
+
+    _campaign_or_404(ctx["params"]["id"])
+    return review.approve(ORG_ID, ctx["params"]["id"], ctx["params"]["draft"], ctx["operation_id"])
+
+
+def reject_draft(ctx: Ctx):
+    from services import review
+
+    _campaign_or_404(ctx["params"]["id"])
+    body = ctx["body"] if isinstance(ctx["body"], dict) else {}
+    return review.reject(ORG_ID, ctx["params"]["id"], ctx["params"]["draft"],
+                         str(body.get("reason", "")), ctx["operation_id"])
+
+
 def graph_sync(ctx: Ctx):
     from services import graph
 
@@ -178,6 +223,13 @@ ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/leads$"), get_leads, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/leads/(?P<lead>[A-Za-z0-9_\-]{{1,64}})/enrich$"),
      enrich_lead, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/leads/(?P<lead>[A-Za-z0-9_\-]{{1,64}})/draft$"),
+     draft_lead, True),
+    ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/drafts$"), list_drafts, True),
+    ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}$"), get_draft, True),
+    ("PATCH", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}$"), edit_draft, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}/approve$"), approve_draft, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}/reject$"), reject_draft, True),
     ("GET", re.compile(r"^/api/system/graph$"), graph_status, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/graph/sync$"), graph_sync, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/graph$"), graph_view, True),

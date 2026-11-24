@@ -185,5 +185,61 @@ def update_lead(org_id: str, campaign_id: str, domain: str, fields: dict) -> Non
     )
 
 
+# ---------------------------------------------------------------- drafts
+def draft_sk(lead_id: str, version: int) -> str:
+    return f"DRAFT#{lead_id}#{version:04d}"
+
+
+def put_draft(item: dict) -> None:
+    """Draft versions are immutable records; a concurrent writer of the same version loses."""
+    table().put_item(Item=to_ddb(item), ConditionExpression="attribute_not_exists(PK)")
+
+
+def latest_draft(org_id: str, campaign_id: str, lead_id: str) -> dict | None:
+    resp = table().query(
+        KeyConditionExpression=Key("PK").eq(pk(org_id, campaign_id)) & Key("SK").begins_with(f"DRAFT#{lead_id}#"),
+        ScanIndexForward=False,
+        Limit=1,
+    )
+    items = resp.get("Items", [])
+    return items[0] if items else None
+
+
+def list_drafts(org_id: str, campaign_id: str, lead_id: str | None = None, limit: int = 200) -> list[dict]:
+    prefix = f"DRAFT#{lead_id}#" if lead_id else "DRAFT#"
+    resp = table().query(
+        KeyConditionExpression=Key("PK").eq(pk(org_id, campaign_id)) & Key("SK").begins_with(prefix),
+        Limit=limit,
+    )
+    return resp.get("Items", [])
+
+
+def set_draft_fields(org_id: str, campaign_id: str, sk: str, fields: dict, *,
+                     only_if_status: tuple[str, ...] | None = None) -> bool:
+    """Update top-level attributes of a draft version. When `only_if_status` is given the
+    update applies only if the current status is one of those, which makes transitions
+    race-safe and retry-safe. Returns False if the condition failed."""
+    names = {f"#f{i}": k for i, k in enumerate(fields)}
+    values = {f":v{i}": to_ddb(v) for i, v in enumerate(fields.values())}
+    cond = "attribute_exists(PK)"
+    if only_if_status:
+        names["#st"] = "status"
+        cond += " AND #st IN (" + ", ".join(f":s{i}" for i in range(len(only_if_status))) + ")"
+        values.update({f":s{i}": s for i, s in enumerate(only_if_status)})
+    try:
+        table().update_item(
+            Key={"PK": pk(org_id, campaign_id), "SK": sk},
+            UpdateExpression="SET " + ", ".join(f"#f{i} = :v{i}" for i in range(len(fields))),
+            ConditionExpression=cond,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except Exception as exc:
+        if type(exc).__name__ == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
 def put_run(item: dict) -> None:
     table().put_item(Item=to_ddb(item))
