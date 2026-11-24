@@ -18,6 +18,9 @@ def aws_env(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
     monkeypatch.setenv("DYNAMODB_TABLE_NAME", "gtmos-test")
     monkeypatch.setenv("GTMOS_API_TOKEN", TOKEN)
+    monkeypatch.setenv("S3_EVIDENCE_BUCKET", "gtmos-evidence-test")
+    for k in ("TAVILY_API_KEY", "ANTHROPIC_API_KEY", "BEDROCK_MODEL_ID", "PROVIDERS_SECRET_ID"):
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("APP_SECRET_ID", raising=False)
 
 
@@ -27,6 +30,9 @@ def table(aws_env):
 
     with mock_aws():
         dynamo.reset_table_cache()
+        boto3.client("s3", region_name="us-west-2").create_bucket(
+            Bucket="gtmos-evidence-test",
+            CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
         ddb = boto3.resource("dynamodb", region_name="us-west-2")
         ddb.create_table(
             TableName="gtmos-test",

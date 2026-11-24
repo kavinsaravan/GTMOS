@@ -138,3 +138,31 @@ def set_stage(org_id: str, campaign_id: str, stage: str) -> None:
         ConditionExpression="attribute_exists(PK)",
         ExpressionAttributeValues={":s": stage},
     )
+
+
+# ---------------------------------------------------------------- leads / runs
+def put_lead(item: dict) -> bool:
+    """Create a lead keyed by normalized domain. Returns False if it already exists (dedupe)."""
+    try:
+        table().put_item(Item=to_ddb(item), ConditionExpression="attribute_not_exists(PK)")
+        return True
+    except Exception as exc:
+        if type(exc).__name__ == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def lead_sk(domain: str) -> str:
+    return f"LEAD#{domain}"
+
+
+def list_leads(org_id: str, campaign_id: str, limit: int = 200) -> list[dict]:
+    resp = table().query(
+        KeyConditionExpression=Key("PK").eq(pk(org_id, campaign_id)) & Key("SK").begins_with("LEAD#"),
+        Limit=limit,
+    )
+    return resp.get("Items", [])
+
+
+def put_run(item: dict) -> None:
+    table().put_item(Item=to_ddb(item))

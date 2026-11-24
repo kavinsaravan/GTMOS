@@ -116,6 +116,19 @@ def patch_icp(ctx: Ctx):
     return icp.update(ORG_ID, _campaign_or_404(ctx["params"]["id"]), body, ctx["operation_id"])
 
 
+def discover(ctx: Ctx):
+    from services import discovery
+
+    return discovery.discover(ORG_ID, _campaign_or_404(ctx["params"]["id"]), ctx["operation_id"])
+
+
+def get_leads(ctx: Ctx):
+    from services import discovery
+
+    _campaign_or_404(ctx["params"]["id"])
+    return discovery.list_leads(ORG_ID, ctx["params"]["id"])
+
+
 # ------------------------------------------------------------------ routing
 # (method, regex, handler, requires_auth)
 ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
@@ -128,6 +141,8 @@ ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/generate-icp$"), generate_icp, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/icp$"), get_icp, True),
     ("PATCH", re.compile(rf"^/api/campaigns/{ID_RE}/icp$"), patch_icp, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/discover$"), discover, True),
+    ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/leads$"), get_leads, True),
 ]
 
 

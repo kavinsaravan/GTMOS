@@ -176,7 +176,7 @@ def extract_json(text: str) -> object:
 
 
 def generate_json(system: str, user: str, model_cls: type[T], *, max_tokens: int = 1500,
-                  retries: int = 1) -> tuple[T, LLMResult]:
+                  retries: int = 1, budget_s: float = TOTAL_BUDGET_S) -> tuple[T, LLMResult]:
     """Call the model and validate the output against a Pydantic schema.
 
     On malformed or schema-invalid output, re-prompt up to `retries` times with the
@@ -189,7 +189,7 @@ def generate_json(system: str, user: str, model_cls: type[T], *, max_tokens: int
     )
     prompt = user
     last_error = ""
-    deadline = time.monotonic() + TOTAL_BUDGET_S
+    deadline = time.monotonic() + budget_s
     for attempt in range(retries + 1):
         remaining = deadline - time.monotonic()
         if attempt > 0 and remaining < 2 * MIN_ATTEMPT_S:
