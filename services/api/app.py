@@ -129,6 +129,13 @@ def get_leads(ctx: Ctx):
     return discovery.list_leads(ORG_ID, ctx["params"]["id"])
 
 
+def enrich_lead(ctx: Ctx):
+    from services import enrichment
+
+    campaign = _campaign_or_404(ctx["params"]["id"])
+    return enrichment.enrich(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"])
+
+
 def graph_sync(ctx: Ctx):
     from services import graph
 
@@ -169,6 +176,8 @@ ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
     ("PATCH", re.compile(rf"^/api/campaigns/{ID_RE}/icp$"), patch_icp, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/discover$"), discover, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/leads$"), get_leads, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/leads/(?P<lead>[A-Za-z0-9_\-]{{1,64}})/enrich$"),
+     enrich_lead, True),
     ("GET", re.compile(r"^/api/system/graph$"), graph_status, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/graph/sync$"), graph_sync, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/graph$"), graph_view, True),

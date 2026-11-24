@@ -28,7 +28,7 @@ def _cfg() -> tuple[str, str, str, str] | None:
     password = secrets.provider_key("NEO4J_PASSWORD")
     if not uri or not password:
         return None
-    return uri, user, password, secrets.provider_key("NEO4J_DATABASE") or "neo4j"
+    return uri, user, password, secrets.provider_key("NEO4J_DATABASE") or ""
 
 
 def configured() -> bool:
@@ -48,6 +48,29 @@ def endpoint(uri: str, database: str) -> str:
     return f"{base}/db/{database}/query/v2"
 
 
+_resolved_db: dict[str, str] = {}   # per-process cache: configured URI -> database that worked
+
+
+def _aura_instance_id(uri: str) -> str | None:
+    m = re.match(r"^[a-z0-9+.\-]+://(?P<id>[a-z0-9]+)\.databases\.neo4j\.io", uri.strip(), re.I)
+    return m.group("id").lower() if m else None
+
+
+def _candidates(uri: str, explicit: str) -> list[str]:
+    """Databases to try. An explicit NEO4J_DATABASE is authoritative; otherwise Aura
+    instances may expose either `neo4j` or the instance id as the database name."""
+    if explicit:
+        return [explicit]
+    cached = _resolved_db.get(uri)
+    if cached:
+        return [cached]
+    out = ["neo4j"]
+    inst = _aura_instance_id(uri)
+    if inst:
+        out.append(inst)
+    return out
+
+
 def _http_post(url: str, headers: dict, body: dict, timeout: float) -> dict:
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec - URL built from configured https host
@@ -64,21 +87,28 @@ def run(statement: str, parameters: dict | None = None, *, timeout: float = 10) 
     headers = {"authorization": f"Basic {token}", "content-type": "application/json",
                "accept": "application/json"}
     body = {"statement": " ".join(statement.split()), "parameters": parameters or {}}
-    try:
-        data = _http_post(endpoint(uri, database), headers, body, timeout)
-    except ApiError:
-        raise
-    except urllib.error.HTTPError as exc:
-        code = _error_code(exc)
-        log.warning("neo4j call failed: HTTP %s %s", exc.code, code)
-        if exc.code in (401, 403):
-            raise ApiError(503, "graph_not_configured", "Neo4j rejected the configured credentials") from None
-        if exc.code == 400:   # our statement/parameters were rejected: a bug, not an outage
-            raise ApiError(502, "graph_query_failed", f"Neo4j rejected the query ({code})") from None
-        raise ApiError(502, "graph_unavailable", "The graph database is unavailable") from None
-    except Exception as exc:
-        log.warning("neo4j call failed: %s", type(exc).__name__)
-        raise ApiError(502, "graph_unavailable", "The graph database is unavailable") from None
+    candidates = _candidates(uri, database)
+    data = None
+    for i, db in enumerate(candidates):
+        try:
+            data = _http_post(endpoint(uri, db), headers, body, timeout)
+            _resolved_db[uri] = db
+            break
+        except ApiError:
+            raise
+        except urllib.error.HTTPError as exc:
+            code = _error_code(exc)
+            log.warning("neo4j call failed: HTTP %s %s", exc.code, code)
+            if exc.code == 404 and code.endswith("DatabaseNotFound") and i + 1 < len(candidates):
+                continue   # try the next candidate database name
+            if exc.code in (401, 403):
+                raise ApiError(503, "graph_not_configured", "Neo4j rejected the configured credentials") from None
+            if exc.code == 400:   # our statement/parameters were rejected: a bug, not an outage
+                raise ApiError(502, "graph_query_failed", f"Neo4j rejected the query ({code})") from None
+            raise ApiError(502, "graph_unavailable", "The graph database is unavailable") from None
+        except Exception as exc:
+            log.warning("neo4j call failed: %s", type(exc).__name__)
+            raise ApiError(502, "graph_unavailable", "The graph database is unavailable") from None
 
     if data.get("errors"):
         raise ApiError(502, "graph_query_failed", f"Neo4j rejected the query ({data['errors'][0].get('code', '?')})")

@@ -164,5 +164,26 @@ def list_leads(org_id: str, campaign_id: str, limit: int = 200) -> list[dict]:
     return resp.get("Items", [])
 
 
+def get_lead_by_id(org_id: str, campaign_id: str, lead_id: str) -> dict | None:
+    for item in list_leads(org_id, campaign_id):
+        if item.get("id") == lead_id:
+            return item
+    return None
+
+
+def update_lead(org_id: str, campaign_id: str, domain: str, fields: dict) -> None:
+    """Set top-level attributes on an existing lead (never creates one)."""
+    names = {f"#f{i}": k for i, k in enumerate(fields)}
+    values = {f":v{i}": to_ddb(v) for i, v in enumerate(fields.values())}
+    expr = "SET " + ", ".join(f"#f{i} = :v{i}" for i in range(len(fields)))
+    table().update_item(
+        Key={"PK": pk(org_id, campaign_id), "SK": lead_sk(domain)},
+        UpdateExpression=expr,
+        ConditionExpression="attribute_exists(PK)",
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values,
+    )
+
+
 def put_run(item: dict) -> None:
     table().put_item(Item=to_ddb(item))

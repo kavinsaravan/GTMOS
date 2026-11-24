@@ -18,6 +18,7 @@ def neo(monkeypatch):
     monkeypatch.setenv("NEO4J_USERNAME", "neo4j")
     monkeypatch.setenv("NEO4J_PASSWORD", "pw-secret")
     monkeypatch.setattr(graph, "_constraints_done", False)
+    monkeypatch.setattr(neo4j, "_resolved_db", {})
 
     def fake(url, headers, body, timeout):
         state["calls"].append((url, headers, body))
@@ -81,6 +82,40 @@ def test_run_maps_errors_without_leaking(neo, exc, status, code):
         neo4j.run("RETURN 1")
     assert (e.value.status, e.value.code) == (status, code)
     assert "pw-secret" not in e.value.message
+
+
+def test_database_falls_back_to_aura_instance_id_and_is_cached(neo, monkeypatch):
+    seen = []
+
+    def fake(url, headers, body, timeout):
+        seen.append(url)
+        if "/db/neo4j/" in url:
+            raise http_error(404, {"errors": [{"code": "Neo.ClientError.Database.DatabaseNotFound"}]})
+        return {"data": {"fields": ["ok"], "values": [[1]]}}
+
+    monkeypatch.setattr(neo4j, "_http_post", fake)
+    assert neo4j.run("RETURN 1 AS ok") == [{"ok": 1}]
+    assert neo4j.run("RETURN 1 AS ok") == [{"ok": 1}]
+    assert seen == ["https://abc123.databases.neo4j.io/db/neo4j/query/v2",
+                    "https://abc123.databases.neo4j.io/db/abc123/query/v2",
+                    "https://abc123.databases.neo4j.io/db/abc123/query/v2"]
+
+
+def test_explicit_database_is_authoritative_no_fallback(neo, monkeypatch):
+    monkeypatch.setenv("NEO4J_DATABASE", "mydb")
+    neo["fail"] = http_error(404, {"errors": [{"code": "Neo.ClientError.Database.DatabaseNotFound"}]})
+    with pytest.raises(ApiError) as e:
+        neo4j.run("RETURN 1")
+    assert e.value.code == "graph_unavailable"
+    assert [c[0] for c in neo["calls"]] == ["https://abc123.databases.neo4j.io/db/mydb/query/v2"]
+
+
+def test_non_aura_host_has_no_fallback(neo, monkeypatch):
+    monkeypatch.setenv("NEO4J_URI", "neo4j://graph.internal.example:7687")
+    neo["fail"] = http_error(404, {"errors": [{"code": "Neo.ClientError.Database.DatabaseNotFound"}]})
+    with pytest.raises(ApiError):
+        neo4j.run("RETURN 1")
+    assert len(neo["calls"]) == 1
 
 
 # ------------------------------------------------------------------ projection
