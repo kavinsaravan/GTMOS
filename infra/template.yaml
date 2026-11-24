@@ -7,10 +7,27 @@ Parameters:
     Type: String
     Default: ""
     Description: Bedrock model or inference-profile ID (set once access is granted)
+  LlmProvider:
+    Type: String
+    Default: auto
+    AllowedValues: [auto, bedrock, anthropic]
+    Description: auto = Bedrock when BedrockModelId is set (falls back to Anthropic API on error), else Anthropic API
+  AnthropicModel:
+    Type: String
+    Default: claude-haiku-4-5-20251001
+    Description: Model ID used for the Anthropic API fallback
   OutboundAllowlist:
     Type: String
     Default: ""
     Description: Comma-separated recipient emails/domains allowed to receive live mail
+
+  ApiToken:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: >-
+      API token (fallback until secretsmanager access is granted; then move to gtmos/app).
+      Passed at deploy time, never committed.
 
 Globals:
   Function:
@@ -55,24 +72,6 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
 
-  # Holds the generated API token. Provider keys live in a separate secret
-  # (gtmos/providers) that is created out-of-band so keys never enter source control.
-  AppSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: gtmos/app
-      GenerateSecretString:
-        SecretStringTemplate: "{}"
-        GenerateStringKey: api_token
-        PasswordLength: 48
-        ExcludePunctuation: true
-
-  ApiLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: /aws/lambda/gtmos-api
-      RetentionInDays: 14
-
   HttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -83,7 +82,6 @@ Resources:
 
   ApiFunction:
     Type: AWS::Serverless::Function
-    DependsOn: ApiLogGroup
     Properties:
       FunctionName: gtmos-api
       CodeUri: ../services/api/
@@ -92,9 +90,11 @@ Resources:
         Variables:
           DYNAMODB_TABLE_NAME: !Ref Table
           S3_EVIDENCE_BUCKET: !Ref EvidenceBucket
-          APP_SECRET_ID: gtmos/app
+          GTMOS_API_TOKEN: !Ref ApiToken
           PROVIDERS_SECRET_ID: gtmos/providers
           BEDROCK_MODEL_ID: !Ref BedrockModelId
+          LLM_PROVIDER: !Ref LlmProvider
+          ANTHROPIC_MODEL: !Ref AnthropicModel
           OUTBOUND_ALLOWLIST: !Ref OutboundAllowlist
           ORG_ID: demo
       Policies:
@@ -122,5 +122,3 @@ Outputs:
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod
   TableName:
     Value: !Ref Table
-  AppSecretArn:
-    Value: !Ref AppSecret

@@ -82,3 +82,14 @@ def test_tenant_scoped_keys(table):
     cid = body["data"]["id"]
     assert dynamo.get_campaign("demo", cid) is not None
     assert dynamo.get_campaign("other-org", cid) is None
+
+
+def test_named_stage_prefix_is_stripped(table):
+    import app
+
+    event = {
+        "rawPath": "/prod/api/health",
+        "headers": {},
+        "requestContext": {"stage": "prod", "http": {"method": "GET"}},
+    }
+    assert app.handler(event)["statusCode"] == 200

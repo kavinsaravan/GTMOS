@@ -50,6 +50,17 @@ def clean(value: Any) -> Any:
     return value
 
 
+def to_ddb(value: Any) -> Any:
+    """DynamoDB rejects Python floats; convert them to Decimal before writing."""
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, dict):
+        return {k: to_ddb(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [to_ddb(v) for v in value]
+    return value
+
+
 def public(item: dict | None) -> dict | None:
     """Strip storage keys before returning an item to callers."""
     if item is None:
@@ -89,3 +100,41 @@ def list_events(org_id: str, campaign_id: str, limit: int = 100) -> list[dict]:
         Limit=limit,
     )
     return resp.get("Items", [])
+
+
+# ---------------------------------------------------------------- ICP
+def icp_sk(version: int) -> str:
+    return f"ICP#{version:04d}"
+
+
+def put_icp(item: dict) -> None:
+    # Versions are immutable; a concurrent writer of the same version loses.
+    table().put_item(Item=to_ddb(item), ConditionExpression="attribute_not_exists(PK)")
+
+
+def latest_icp(org_id: str, campaign_id: str) -> dict | None:
+    resp = table().query(
+        KeyConditionExpression=Key("PK").eq(pk(org_id, campaign_id)) & Key("SK").begins_with("ICP#"),
+        ScanIndexForward=False,
+        Limit=1,
+    )
+    items = resp.get("Items", [])
+    return items[0] if items else None
+
+
+def approve_icp(org_id: str, campaign_id: str, version: int, approved_at: str) -> None:
+    table().update_item(
+        Key={"PK": pk(org_id, campaign_id), "SK": icp_sk(version)},
+        UpdateExpression="SET approved_at = :t",
+        ConditionExpression="attribute_exists(PK)",
+        ExpressionAttributeValues={":t": approved_at},
+    )
+
+
+def set_stage(org_id: str, campaign_id: str, stage: str) -> None:
+    table().update_item(
+        Key={"PK": pk(org_id, campaign_id), "SK": "META"},
+        UpdateExpression="SET stage = :s",
+        ConditionExpression="attribute_exists(PK)",
+        ExpressionAttributeValues={":s": stage},
+    )

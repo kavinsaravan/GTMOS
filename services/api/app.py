@@ -31,6 +31,18 @@ def health(ctx: Ctx):
     return {"ok": True}
 
 
+def llm_status(ctx: Ctx):
+    """Which LLM provider would serve a request. Reports configuration only, never keys."""
+    from integrations import llm
+
+    return {
+        "active_provider": llm.active_provider(),
+        "mode": os.environ.get("LLM_PROVIDER", "auto"),
+        "bedrock_configured": bool(os.environ.get("BEDROCK_MODEL_ID")),
+        "anthropic_configured": bool(secrets.provider_key("ANTHROPIC_API_KEY")),
+    }
+
+
 def create_campaign(ctx: Ctx):
     try:
         body = CampaignCreate.model_validate(ctx["body"])
@@ -75,14 +87,47 @@ def campaign_events(ctx: Ctx):
     return [dynamo.public(i) for i in dynamo.list_events(ORG_ID, cid)]
 
 
+def _campaign_or_404(cid: str) -> dict:
+    item = dynamo.get_campaign(ORG_ID, cid)
+    if not item:
+        raise ApiError(404, "not_found", "Campaign not found")
+    return item
+
+
+def generate_icp(ctx: Ctx):
+    from services import icp
+
+    return icp.generate(ORG_ID, _campaign_or_404(ctx["params"]["id"]), ctx["operation_id"])
+
+
+def get_icp(ctx: Ctx):
+    from services import icp
+
+    _campaign_or_404(ctx["params"]["id"])
+    return icp.get_latest(ORG_ID, ctx["params"]["id"])
+
+
+def patch_icp(ctx: Ctx):
+    from services import icp
+
+    body = ctx["body"]
+    if not isinstance(body, dict):
+        raise ApiError(422, "validation_error", "Body must be a JSON object")
+    return icp.update(ORG_ID, _campaign_or_404(ctx["params"]["id"]), body, ctx["operation_id"])
+
+
 # ------------------------------------------------------------------ routing
 # (method, regex, handler, requires_auth)
 ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
     ("GET", re.compile(r"^/api/health$"), health, False),
+    ("GET", re.compile(r"^/api/system/llm$"), llm_status, True),
     ("POST", re.compile(r"^/api/campaigns$"), create_campaign, True),
     ("GET", re.compile(r"^/api/campaigns$"), list_campaigns, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}$"), get_campaign, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/events$"), campaign_events, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/generate-icp$"), generate_icp, True),
+    ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/icp$"), get_icp, True),
+    ("PATCH", re.compile(rf"^/api/campaigns/{ID_RE}/icp$"), patch_icp, True),
 ]
 
 
@@ -119,6 +164,10 @@ def handler(event: dict, context: Any = None) -> dict:
     op_id = new_id("op")
     method = event.get("requestContext", {}).get("http", {}).get("method", "")
     path = event.get("rawPath", "")
+    # Named stages (e.g. /prod) are included in rawPath by API Gateway; strip it.
+    stage = event.get("requestContext", {}).get("stage", "")
+    if stage and stage != "$default" and path.startswith(f"/{stage}/"):
+        path = path[len(stage) + 1:]
     status = 500
     try:
         headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
