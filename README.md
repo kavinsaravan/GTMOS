@@ -16,7 +16,7 @@ Rules the system follows: live data only, no faked integrations (an unconfigured
 | `agents/` | Three local Band agents: Planner, Researcher, Reviewer |
 | `infra/` | `template.yaml` (SAM) and `flexprice_setup.py` (creates the metered features, idempotent) |
 | `tests/` | pytest suite (providers are faked; no network) |
-| `docs/` | `architecture.md`, `demo.md` |
+| `docs/` | `architecture.md` |
 
 ## Integrations
 
