@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
+import { BandPanel } from "@/components/band-panel";
 import { Badge, Card, Notice, Spinner, fmtDate } from "@/components/ui";
 import { errorText, useApi } from "@/lib/api";
 import type { AuditEvent, Draft, Lead } from "@/lib/types";
@@ -107,6 +108,8 @@ export default function Dashboard() {
           );
         })}
       </div>
+
+      <BandPanel campaignId={id} leads={L} />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card title="Activity timeline">

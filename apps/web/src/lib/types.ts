@@ -172,6 +172,37 @@ export interface Draft {
   created_at: string;
 }
 
+export interface Billing {
+  configured: boolean;
+  costs: Record<string, number>;
+  wallet?: { balance: string; status: string } | null;
+  error?: string;
+}
+
+export type OrchStatus = "queued" | "planning" | "researching" | "reviewing" | "awaiting_approval" | "failed";
+
+export interface OrchEvent {
+  agent: "planner" | "researcher" | "reviewer";
+  kind: string;
+  at: string;
+  summary: string;
+  band_room_id?: string | null;
+  band_message_id?: string | null;
+  mentioned?: string | null;
+}
+
+export interface Orchestration {
+  id: string;
+  lead_id: string;
+  lead_name: string;
+  status: OrchStatus;
+  band_room_id?: string;
+  draft_id?: string;
+  trace: OrchEvent[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AuditEvent {
   id: string;
   action: string;

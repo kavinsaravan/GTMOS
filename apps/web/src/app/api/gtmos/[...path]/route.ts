@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 const METHODS_WITH_BODY = new Set(["POST", "PATCH", "PUT"]);
 // Only forward the resources the UI uses; everything else is a 404 here.
-const ALLOWED = /^(campaigns(\/[A-Za-z0-9_\-]{1,64}(\/[A-Za-z0-9_\-/]{1,200})?)?|system\/(llm|graph)|health)$/;
+const ALLOWED = /^(campaigns(\/[A-Za-z0-9_\-]{1,64}(\/[A-Za-z0-9_\-/]{1,200})?)?|system\/(llm|graph|billing)|health)$/;
 
 function envelopeError(status: number, code: string, message: string) {
   return Response.json(

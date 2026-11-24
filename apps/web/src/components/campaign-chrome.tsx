@@ -3,10 +3,24 @@ import clsx from "clsx";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Rail } from "./rail";
-import { Notice, Spinner } from "./ui";
+import { Badge, Notice, Spinner } from "./ui";
 import { errorText, useApi } from "@/lib/api";
 import { railIndex } from "@/lib/stage";
-import type { Campaign } from "@/lib/types";
+import type { Billing, Campaign } from "@/lib/types";
+
+function BillingBadge() {
+  const { data, error } = useApi<Billing>("system/billing");
+  if (error) return <Badge tone="warn" title={error.message}>Credits unavailable</Badge>;
+  if (!data) return null;
+  if (!data.configured) return <Badge title="Flexprice is not configured; operations run unmetered">Metering off</Badge>;
+  if (data.error || !data.wallet) return <Badge tone="warn" title={data.error}>Credits unavailable</Badge>;
+  const balance = Number(data.wallet.balance);
+  return (
+    <Badge tone={balance > 0 ? "good" : "bad"} title="Flexprice wallet balance, charged per operation">
+      {balance} credits
+    </Badge>
+  );
+}
 
 export function CampaignChrome({ id, children }: { id: string; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -31,7 +45,10 @@ export function CampaignChrome({ id, children }: { id: string; children: React.R
               {campaign?.product_name ?? <span className="text-stone-400">Loading…</span>}
             </h1>
           </div>
-          <Rail current={step} />
+          <div className="flex flex-col items-end gap-2">
+            <BillingBadge />
+            <Rail current={step} />
+          </div>
         </div>
         <nav className="flex gap-1 border-b border-stone-200" aria-label="Campaign sections">
           {tabs.map((t) => {

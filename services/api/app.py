@@ -117,10 +117,24 @@ def patch_icp(ctx: Ctx):
     return icp.update(ORG_ID, _campaign_or_404(ctx["params"]["id"]), body, ctx["operation_id"])
 
 
+def _metered(operation: str, ctx: Ctx, campaign: dict, fn: Callable[[], Any]):
+    from services import billing
+
+    return billing.metered(operation, ORG_ID, campaign["id"], ctx, fn)
+
+
+def billing_status(ctx: Ctx):
+    from services import billing
+
+    return billing.status(ORG_ID)
+
+
 def discover(ctx: Ctx):
     from services import discovery
 
-    return discovery.discover(ORG_ID, _campaign_or_404(ctx["params"]["id"]), ctx["operation_id"])
+    campaign = _campaign_or_404(ctx["params"]["id"])
+    return _metered("discovery", ctx, campaign,
+                    lambda: discovery.discover(ORG_ID, campaign, ctx["operation_id"]))
 
 
 def get_leads(ctx: Ctx):
@@ -134,14 +148,52 @@ def enrich_lead(ctx: Ctx):
     from services import enrichment
 
     campaign = _campaign_or_404(ctx["params"]["id"])
-    return enrichment.enrich(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"])
+    return _metered("enrichment", ctx, campaign,
+                    lambda: enrichment.enrich(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"]))
 
 
 def draft_lead(ctx: Ctx):
     from services import outreach
 
     campaign = _campaign_or_404(ctx["params"]["id"])
-    return outreach.generate(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"])
+    return _metered("draft", ctx, campaign,
+                    lambda: outreach.generate(ORG_ID, campaign, ctx["params"]["lead"], ctx["operation_id"]))
+
+
+def start_orchestration(ctx: Ctx):
+    from services import orchestration
+
+    body = ctx["body"] if isinstance(ctx["body"], dict) else {}
+    return orchestration.create(ORG_ID, _campaign_or_404(ctx["params"]["id"]),
+                                body.get("lead_id", ""), ctx["operation_id"])
+
+
+def list_orchestrations(ctx: Ctx):
+    from services import orchestration
+
+    _campaign_or_404(ctx["params"]["id"])
+    return orchestration.list_runs(ORG_ID, ctx["params"]["id"])
+
+
+def queued_orchestrations(ctx: Ctx):
+    from services import orchestration
+
+    return orchestration.queued(ORG_ID)
+
+
+def claim_orchestration(ctx: Ctx):
+    from services import orchestration
+
+    _campaign_or_404(ctx["params"]["id"])
+    return orchestration.claim(ORG_ID, ctx["params"]["id"], ctx["params"]["run"], ctx["operation_id"])
+
+
+def orchestration_event(ctx: Ctx):
+    from services import orchestration
+
+    _campaign_or_404(ctx["params"]["id"])
+    return orchestration.add_event(ORG_ID, ctx["params"]["id"], ctx["params"]["run"],
+                                   ctx["body"], ctx["operation_id"])
 
 
 def list_drafts(ctx: Ctx):
@@ -184,7 +236,8 @@ def reject_draft(ctx: Ctx):
 def graph_sync(ctx: Ctx):
     from services import graph
 
-    return graph.sync(ORG_ID, _campaign_or_404(ctx["params"]["id"]))
+    campaign = _campaign_or_404(ctx["params"]["id"])
+    return _metered("graph_query", ctx, campaign, lambda: graph.sync(ORG_ID, campaign))
 
 
 def graph_view(ctx: Ctx):
@@ -230,7 +283,15 @@ ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
     ("PATCH", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}$"), edit_draft, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}/approve$"), approve_draft, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/drafts/{DRAFT_RE}/reject$"), reject_draft, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/orchestrations$"), start_orchestration, True),
+    ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/orchestrations$"), list_orchestrations, True),
+    ("GET", re.compile(r"^/api/orchestrations/queued$"), queued_orchestrations, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/orchestrations/(?P<run>[A-Za-z0-9_\-]{{1,64}})/claim$"),
+     claim_orchestration, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/orchestrations/(?P<run>[A-Za-z0-9_\-]{{1,64}})/events$"),
+     orchestration_event, True),
     ("GET", re.compile(r"^/api/system/graph$"), graph_status, True),
+    ("GET", re.compile(r"^/api/system/billing$"), billing_status, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/graph/sync$"), graph_sync, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/graph$"), graph_view, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/graph/decisions$"), graph_decisions, True),

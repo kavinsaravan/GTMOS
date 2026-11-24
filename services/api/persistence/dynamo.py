@@ -243,3 +243,74 @@ def set_draft_fields(org_id: str, campaign_id: str, sk: str, fields: dict, *,
 
 def put_run(item: dict) -> None:
     table().put_item(Item=to_ddb(item))
+
+
+# ------------------------------------------------- Band orchestration runs
+def orch_sk(run_id: str) -> str:
+    return f"ORCH#{run_id}"
+
+
+def orch_gsi(org_id: str) -> str:
+    return f"ORG#{org_id}#ORCH"
+
+
+def put_orch(item: dict) -> None:
+    table().put_item(Item=to_ddb(item), ConditionExpression="attribute_not_exists(PK)")
+
+
+def get_orch(org_id: str, campaign_id: str, run_id: str) -> dict | None:
+    return table().get_item(Key={"PK": pk(org_id, campaign_id), "SK": orch_sk(run_id)}).get("Item")
+
+
+def list_orch(org_id: str, campaign_id: str, limit: int = 50) -> list[dict]:
+    resp = table().query(
+        KeyConditionExpression=Key("PK").eq(pk(org_id, campaign_id)) & Key("SK").begins_with("ORCH#"),
+        Limit=limit,
+    )
+    return resp.get("Items", [])
+
+
+def list_orch_by_status(org_id: str, status: str, limit: int = 20) -> list[dict]:
+    resp = table().query(
+        IndexName="GSI1",
+        KeyConditionExpression=Key("GSI1PK").eq(orch_gsi(org_id)),
+        FilterExpression="#st = :s",
+        ExpressionAttributeNames={"#st": "status"},
+        ExpressionAttributeValues={":s": status},
+    )
+    return resp.get("Items", [])[:limit]
+
+
+def transition_orch(org_id: str, campaign_id: str, run_id: str, *, new_status: str | None = None,
+                    only_from: tuple[str, ...] | None = None, event: dict | None = None,
+                    fields: dict | None = None) -> bool:
+    """Race-safe update of a run: optional status change guarded by `only_from`, optional trace append."""
+    sets, names, values = ["#upd = :upd"], {"#upd": "updated_at"}, {":upd": now_iso()}
+    if new_status:
+        sets.append("#st = :new")
+        names["#st"] = "status"
+        values[":new"] = new_status
+    if event is not None:
+        sets.append("#tr = list_append(if_not_exists(#tr, :empty), :ev)")
+        names["#tr"] = "trace"
+        values[":empty"] = []
+        values[":ev"] = [to_ddb(event)]
+    for i, (k, v) in enumerate((fields or {}).items()):
+        sets.append(f"#x{i} = :x{i}")
+        names[f"#x{i}"] = k
+        values[f":x{i}"] = to_ddb(v)
+    cond = "attribute_exists(PK)"
+    if only_from:
+        names["#st"] = "status"
+        cond += " AND #st IN (" + ", ".join(f":f{i}" for i in range(len(only_from))) + ")"
+        values.update({f":f{i}": s for i, s in enumerate(only_from)})
+    try:
+        table().update_item(
+            Key={"PK": pk(org_id, campaign_id), "SK": orch_sk(run_id)},
+            UpdateExpression="SET " + ", ".join(sets), ConditionExpression=cond,
+            ExpressionAttributeNames=names, ExpressionAttributeValues=values)
+        return True
+    except Exception as exc:
+        if type(exc).__name__ == "ConditionalCheckFailedException":
+            return False
+        raise

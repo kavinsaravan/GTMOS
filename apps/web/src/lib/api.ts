@@ -51,6 +51,12 @@ export async function api<T>(method: "GET" | "POST" | "PATCH", path: string, bod
 
 export function errorText(e: unknown): string {
   if (e instanceof ApiClientError) {
+    if (e.status === 402) {
+      const d = (e.details as unknown as { operation: string; required: number; balance: number }[] | null)?.[0];
+      return d
+        ? `Out of credits: ${d.operation.replace(/_/g, " ")} needs ${d.required}, balance is ${d.balance}. Top up the Flexprice wallet to continue.`
+        : e.message;
+    }
     const detail = e.details?.map((d) => `${d.field}: ${d.msg}`).join("; ");
     return detail ? `${e.message} (${detail})` : e.message;
   }
