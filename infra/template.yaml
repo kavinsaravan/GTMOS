@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: GTMOS backend - API Gateway (HTTP API) -> Lambda (Python) -> DynamoDB / S3 / Secrets Manager
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: ""
+    Description: Bedrock model or inference-profile ID (set once access is granted)
+  OutboundAllowlist:
+    Type: String
+    Default: ""
+    Description: Comma-separated recipient emails/domains allowed to receive live mail
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Timeout: 29            # HTTP API integration limit is 30s
+    MemorySize: 512
+    Tracing: Active
+
+Resources:
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: gtmos
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+        - { AttributeName: GSI1PK, AttributeType: S }
+        - { AttributeName: GSI1SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - { AttributeName: GSI1PK, KeyType: HASH }
+            - { AttributeName: GSI1SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      SSESpecification: { SSEEnabled: true }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+
+  EvidenceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  # Holds the generated API token. Provider keys live in a separate secret
+  # (gtmos/providers) that is created out-of-band so keys never enter source control.
+  AppSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: gtmos/app
+      GenerateSecretString:
+        SecretStringTemplate: "{}"
+        GenerateStringKey: api_token
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/gtmos-api
+      RetentionInDays: 14
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      FunctionName: gtmos-api
+      CodeUri: ../services/api/
+      Handler: app.handler
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref Table
+          S3_EVIDENCE_BUCKET: !Ref EvidenceBucket
+          APP_SECRET_ID: gtmos/app
+          PROVIDERS_SECRET_ID: gtmos/providers
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          OUTBOUND_ALLOWLIST: !Ref OutboundAllowlist
+          ORG_ID: demo
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Table }
+        - S3CrudPolicy: { BucketName: !Ref EvidenceBucket }
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:gtmos/*
+            - Effect: Allow
+              Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
+      Events:
+        Any:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/{proxy+}
+            Method: ANY
+
+Outputs:
+  ApiUrl:
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+  TableName:
+    Value: !Ref Table
+  AppSecretArn:
+    Value: !Ref AppSecret
