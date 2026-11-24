@@ -19,7 +19,8 @@ def aws_env(monkeypatch):
     monkeypatch.setenv("DYNAMODB_TABLE_NAME", "gtmos-test")
     monkeypatch.setenv("GTMOS_API_TOKEN", TOKEN)
     monkeypatch.setenv("S3_EVIDENCE_BUCKET", "gtmos-evidence-test")
-    for k in ("TAVILY_API_KEY", "ANTHROPIC_API_KEY", "BEDROCK_MODEL_ID", "PROVIDERS_SECRET_ID"):
+    for k in ("TAVILY_API_KEY", "ANTHROPIC_API_KEY", "BEDROCK_MODEL_ID", "PROVIDERS_SECRET_ID",
+              "NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD", "NEO4J_DATABASE"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("APP_SECRET_ID", raising=False)
 

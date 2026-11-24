@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from integrations import llm, tavily
 from models.common import ApiError, new_id
 from persistence import dynamo, evidence
-from services import audit, firmographics, scoring
+from services import audit, firmographics, graph, scoring
 
 ALLOWED_STAGES = {"icp_approved", "discovery", "leads_ready"}
 MAX_LEADS = 10
@@ -56,6 +56,8 @@ employees_evidence with a verbatim quote.
 - geography_match: "match", "mismatch" or "unknown" versus the target geography.
 - exclusion_hit: a short reason if the company falls in an ICP exclusion, else null.
 - domain: the company's primary website domain (e.g. "acme.com"), no scheme or path.
+- competitors: companies that a source explicitly names as a competitor or rival of this company. Give the \
+competitor's name and a verbatim quote that names both. Leave empty if no source says so; never guess.
 - Return at most 8 companies, at most 3 evidence items each. Prefer fewer, well-supported companies."""
 
 
@@ -65,6 +67,13 @@ class EvidenceRef(BaseModel):
     source_id: str
     quote: str = Field(min_length=1, max_length=400)
     signal_index: int | None = None
+
+
+class CompetitorRef(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str = Field(min_length=2, max_length=120)
+    source_id: str
+    quote: str = Field(min_length=1, max_length=400)
 
 
 class Candidate(BaseModel):
@@ -77,6 +86,7 @@ class Candidate(BaseModel):
     geography_match: Literal["match", "mismatch", "unknown"] = "unknown"
     exclusion_hit: str | None = None
     evidence: list[EvidenceRef] = Field(default_factory=list, max_length=6)
+    competitors: list[CompetitorRef] = Field(default_factory=list, max_length=10)
 
 
 class Extraction(BaseModel):
@@ -205,6 +215,17 @@ def _verify(c: Candidate, domain: str, by_id: dict[str, dict], signals: list[str
     if not kept:
         return None
 
+    # A competitor edge needs a verbatim quote, in a retrieved source, that names the rival.
+    rivals, seen_rivals = [], set()
+    for r in c.competitors[:3]:
+        src = by_id.get(r.source_id)
+        key = r.name.strip().casefold()
+        if (src and key not in seen_rivals and key != c.company_name.strip().casefold()
+                and r.name.strip().casefold() in r.quote.casefold()
+                and quote_in(r.quote, f"{src['title']} {src['content']}")):
+            seen_rivals.add(key)
+            rivals.append({"name": r.name.strip(), "url": src["url"], "quote": r.quote.strip()})
+
     # Each ICP signal scores once, each source URL backs at most one scored signal, and
     # evidence from primary / third-party sources is considered before aggregator pages.
     strong, weak, used_urls = set(), set(), set()
@@ -222,7 +243,7 @@ def _verify(c: Candidate, domain: str, by_id: dict[str, dict], signals: list[str
     cited_text = " ".join(f"{by_id[e['source_id']]['content']} {e['url']}" for e in kept).casefold()
     domain_in_cited = domain in cited_text or any(firmographics.host_matches(u, domain) for u in urls)
     return {"kept": kept, "urls": urls, "strong": strong, "weak": weak, "employees": employees,
-            "emp_source": emp_source, "domain_in_cited": domain_in_cited}
+            "emp_source": emp_source, "domain_in_cited": domain_in_cited, "competitors": rivals}
 
 
 def _prelim_score(c: Candidate, v: dict, fields: dict, geo_required: bool) -> int:
@@ -298,12 +319,14 @@ def discover(org_id: str, campaign: dict, operation_id: str) -> dict:
         else:
             counts["duplicates"] += 1
 
+    graph_status = graph.sync_best_effort(org_id, campaign, created, operation_id)  # never fails the run
+
     run = {
         "PK": dynamo.pk(org_id, cid), "SK": f"RUN#{run_id}", "id": run_id, "org_id": org_id,
         "campaign_id": cid, "kind": "discovery", "icp_version": int(icp["version"]),
         "search_provider": "tavily", "queries": search_status, "sources_retrieved": len(sources),
         "evidence_pack_key": pack_key, "llm": llm_meta, "counts": counts,
-        "leads_created": len(created), "created_at": dynamo.now_iso(),
+        "graph": graph_status, "leads_created": len(created), "created_at": dynamo.now_iso(),
     }
     dynamo.put_run(run)
     dynamo.set_stage(org_id, cid, "leads_ready")
@@ -377,7 +400,7 @@ def _finalize(org_id, cid, run_id, icp, fields, criteria, s: dict, enrich: dict 
         "PK": dynamo.pk(org_id, cid), "SK": dynamo.lead_sk(domain), "id": new_id("lead"),
         "org_id": org_id, "campaign_id": cid, "run_id": run_id, "icp_version": int(icp["version"]),
         "company_name": c.company_name.strip(), "domain": domain, "source_urls": urls,
-        "evidence": kept, "verification_status": "verified" if basis else "unverified",
+        "evidence": kept, "competitors": v["competitors"], "verification_status": "verified" if basis else "unverified",
         "domain_check": {"basis": basis, "url": basis_url},
         "industry_match": c.industry_match, "employees": employees,
         "employees_source": emp_source, "geography_match": c.geography_match,

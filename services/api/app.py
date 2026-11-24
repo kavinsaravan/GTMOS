@@ -129,6 +129,32 @@ def get_leads(ctx: Ctx):
     return discovery.list_leads(ORG_ID, ctx["params"]["id"])
 
 
+def graph_sync(ctx: Ctx):
+    from services import graph
+
+    return graph.sync(ORG_ID, _campaign_or_404(ctx["params"]["id"]))
+
+
+def graph_view(ctx: Ctx):
+    from services import graph
+
+    _campaign_or_404(ctx["params"]["id"])
+    return graph.graph(ORG_ID, ctx["params"]["id"])
+
+
+def graph_decisions(ctx: Ctx):
+    from services import graph
+
+    _campaign_or_404(ctx["params"]["id"])
+    return graph.decisions(ORG_ID, ctx["params"]["id"])
+
+
+def graph_status(ctx: Ctx):
+    from integrations import neo4j
+
+    return {"configured": neo4j.configured()}
+
+
 # ------------------------------------------------------------------ routing
 # (method, regex, handler, requires_auth)
 ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
@@ -143,6 +169,10 @@ ROUTES: list[tuple[str, re.Pattern, Callable[[Ctx], Any], bool]] = [
     ("PATCH", re.compile(rf"^/api/campaigns/{ID_RE}/icp$"), patch_icp, True),
     ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/discover$"), discover, True),
     ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/leads$"), get_leads, True),
+    ("GET", re.compile(r"^/api/system/graph$"), graph_status, True),
+    ("POST", re.compile(rf"^/api/campaigns/{ID_RE}/graph/sync$"), graph_sync, True),
+    ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/graph$"), graph_view, True),
+    ("GET", re.compile(rf"^/api/campaigns/{ID_RE}/graph/decisions$"), graph_decisions, True),
 ]
 
 
