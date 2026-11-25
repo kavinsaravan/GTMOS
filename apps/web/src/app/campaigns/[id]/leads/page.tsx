@@ -18,6 +18,8 @@ export default function Leads() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "fit", dir: -1 });
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState("");
 
   const decisionByLead = useMemo(
     () => new Map((decisions.data?.decisions ?? []).map((d) => [d.lead_id, d])),
@@ -52,6 +54,20 @@ export default function Leads() {
     }
   }
 
+  async function retryDiscovery() {
+    setRetrying(true);
+    setRetryError("");
+    try {
+      await api("POST", `campaigns/${id}/discover`);
+      await leads.reload();
+      await decisions.reload();
+    } catch (e) {
+      setRetryError(errorText(e));
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   const toggle = (key: SortKey) => setSort((s) => ({ key, dir: s.key === key ? (-s.dir as 1 | -1) : key === "name" ? 1 : -1 }));
 
   if (leads.loading && !leads.data) return <Spinner label="Loading leads" />;
@@ -63,6 +79,16 @@ export default function Leads() {
         <Link className="underline" href={`/campaigns/${id}/icp`}>
           Go to profile
         </Link>
+        <div className="mt-4 space-y-3">
+          <p className="text-xs text-stone-500">
+            Already approved and nothing appeared? The last discovery run may have failed. Retrying can take up to 30 seconds and is only
+            charged if it succeeds.
+          </p>
+          <Button variant="secondary" busy={retrying} onClick={retryDiscovery}>
+            Retry discovery
+          </Button>
+          {retryError && <Notice>{retryError}</Notice>}
+        </div>
       </Empty>
     );
   }

@@ -58,7 +58,8 @@ employees_evidence with a verbatim quote.
 - domain: the company's primary website domain (e.g. "acme.com"), no scheme or path.
 - competitors: companies that a source explicitly names as a competitor or rival of this company. Give the \
 competitor's name and a verbatim quote that names both. Leave empty if no source says so; never guess.
-- Return at most 8 companies, at most 3 evidence items each. Prefer fewer, well-supported companies."""
+- Return at most 5 companies, at most 2 evidence items each, at most 2 competitors each. Keep quotes short. \
+Prefer fewer, well-supported companies."""
 
 
 # ------------------------------------------------------------- model output schema
@@ -299,7 +300,7 @@ def discover(org_id: str, campaign: dict, operation_id: str) -> dict:
     if sources:
         extraction, result = llm.generate_json(
             SYSTEM_PROMPT, build_user_prompt(fields, criteria, sources), Extraction,
-            max_tokens=3000, budget_s=LLM_BUDGET_S)
+            max_tokens=2000, budget_s=LLM_BUDGET_S)
         llm_meta = {"provider": result.provider, "model": result.model,
                     "fallback_reason": result.fallback_reason}
         counts["extracted"] = len(extraction.companies)
