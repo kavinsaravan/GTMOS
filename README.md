@@ -13,7 +13,7 @@ Rules the system follows: live data only, no faked integrations (an unconfigured
 | --- | --- |
 | `services/api/` | Python 3.12 Lambda behind API Gateway (routes in `app.py`) |
 | `apps/web/` | Next.js / TypeScript / Tailwind / Radix UI. Server-side proxy keeps the API token off the browser |
-| `agents/` | Three local Band agents: Planner, Researcher, Reviewer |
+| `agents/` | LangGraph chain (Planner, Researcher, Reviewer) run by one local worker |
 | `infra/` | `template.yaml` (SAM) and `flexprice_setup.py` (creates the metered features, idempotent) |
 | `tests/` | pytest suite (providers are faked; no network) |
 | `docs/` | `architecture.md` |
@@ -26,7 +26,7 @@ Rules the system follows: live data only, no faked integrations (an unconfigured
 | Tavily, Hunter.io | discovery evidence, contacts | `not_configured` |
 | Neo4j Aura | relationship graph and decision query | `not_configured` |
 | Gmail API | draft creation after approval | draft recorded as `not_connected` |
-| Band | multi-agent handoffs via `band-sdk` | agents simply are not running |
+| LangGraph | multi-agent handoffs in a local worker | runs stay `queued` until the worker is running |
 | Flexprice | per-operation credits, 402 gating | runs unmetered, reports `configured: false` |
 
 Secrets live in AWS Secrets Manager (`gtmos/providers`), never in the repo.
@@ -48,7 +48,7 @@ AWS_PROFILE=gtmos PROVIDERS_SECRET_ID=gtmos/providers .venv/bin/python infra/fle
 # web app (needs GTMOS_API_URL and GTMOS_API_TOKEN in apps/web/.env.local)
 cd apps/web && npm install && npm run dev
 
-# Band agents (local processes; need AWS profile `gtmos` or BAND_* env vars)
+# LangGraph worker (one local process; needs GTMOS_API_TOKEN or .data/api_token)
 python -m venv agents/.venv && agents/.venv/bin/pip install -r agents/requirements.txt
 GTMOS_API_URL=https://<api-id>.execute-api.us-west-2.amazonaws.com/prod agents/start.sh agents/.venv/bin/python
 ```
@@ -61,13 +61,14 @@ enrichment 3, graph query 1, draft 2, uncertainty resolution 2. If Flexprice is 
 `billing_unavailable`). Flexprice does not reject overdrafts itself, so the pre-check is ours.
 `GET /api/system/billing` returns the live balance; the web app shows it in the campaign header.
 
-## Band orchestration
+## Agent orchestration (LangGraph)
 
-`POST /api/campaigns/{id}/orchestrations {"lead_id": ...}` queues a run. The Planner (polling) claims it, opens a
-real Band room with the other two agents, and @mentions the Researcher. The Researcher enriches the lead through the
-API and @mentions the Reviewer, who generates the draft and @mentions the Planner. The run ends `awaiting_approval`.
-Agents only receive @mentioned messages, so every handoff is a real Band message; the trace stores Band's room and
-message ids. Agents never approve or send.
+`POST /api/campaigns/{id}/orchestrations {"lead_id": ...}` queues a run. The worker (`python -m agents.worker`) polls
+for queued runs, claims one, and runs it through a LangGraph state graph: `planner_start → researcher → reviewer →
+planner_finish`. The Researcher enriches the lead through the API, the Reviewer generates the draft, and the run ends
+`awaiting_approval`. Abstaining or failing ends the graph early through a conditional edge. Each handoff is a graph
+edge recorded in the run trace; the trace stores the LangGraph thread id (the run id) and the step id (the node).
+Agents never approve or send.
 
 ## Uncertainty resolution
 
@@ -81,7 +82,8 @@ abstain the run ends `abstained` and no enrichment or draft credits are spent.
 
 ## Known limits
 
-- Band agents hold websockets, so they run as local processes, not in Lambda.
+- The LangGraph worker is a local process, not part of the Lambda. Its graph state is in memory, so a worker crash
+  mid-run leaves that run in an active status until it is handled by hand.
 - Credit check and debit are not atomic, so concurrent requests can overspend slightly. A replayed `Idempotency-Key`
   is not charged twice but the work still reruns.
 - Exclusivity is a fixed rule (`hold_rival_active`), not a per-user policy; there is no per-campaign research budget

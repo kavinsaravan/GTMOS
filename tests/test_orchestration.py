@@ -47,16 +47,28 @@ def test_claim_is_single_winner(run):
     assert call("GET", "/api/orchestrations/queued")[1]["data"] == []
 
 
-def test_handoff_trace_records_band_ids_and_status(run):
+def test_handoff_trace_records_thread_and_step_ids_and_status(run):
     cid, _, r = run
     status, body = ev(cid, r["id"], agent="planner", kind="handoff_sent", status="researching",
-                      band_room_id="room-1", band_message_id="msg-1", mentioned="researcher",
+                      thread_id=r["id"], step_id="planner_start", mentioned="researcher",
                       summary="Planner handed off to Researcher")
     assert status == 201
     d = body["data"]
-    assert d["status"] == "researching" and d["band_room_id"] == "room-1"
+    assert d["status"] == "researching" and d["thread_id"] == r["id"]
     t = d["trace"][-1]
-    assert (t["agent"], t["kind"], t["band_message_id"], t["mentioned"]) == ("planner", "handoff_sent", "msg-1", "researcher")
+    assert (t["agent"], t["kind"], t["step_id"], t["mentioned"]) == ("planner", "handoff_sent", "planner_start", "researcher")
+
+
+def test_runs_recorded_with_old_band_ids_still_display(run):
+    from persistence import dynamo
+
+    cid, _, r = run
+    dynamo.transition_orch("demo", cid, r["id"], event={
+        "at": dynamo.now_iso(), "agent": "planner", "kind": "room_created", "summary": "old run",
+        "band_room_id": "room-1", "band_message_id": "msg-1"}, fields={"band_room_id": "room-1"})
+    d = call("GET", f"/api/campaigns/{cid}/orchestrations")[1]["data"][0]
+    assert d["thread_id"] == "room-1" and d["trace"][-1]["thread_id"] == "room-1"
+    assert d["trace"][-1]["step_id"] == "msg-1"
 
 
 def test_event_validation(run):

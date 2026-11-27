@@ -186,8 +186,8 @@ export interface OrchEvent {
   kind: string;
   at: string;
   summary: string;
-  band_room_id?: string | null;
-  band_message_id?: string | null;
+  thread_id?: string | null;
+  step_id?: string | null;
   mentioned?: string | null;
 }
 
@@ -196,7 +196,7 @@ export interface Orchestration {
   lead_id: string;
   lead_name: string;
   status: OrchStatus;
-  band_room_id?: string;
+  thread_id?: string;
   draft_id?: string;
   trace: OrchEvent[];
   created_at: string;

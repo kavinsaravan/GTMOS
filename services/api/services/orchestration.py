@@ -1,9 +1,9 @@
-"""Band multi-agent orchestration runs: the durable record and trace of an agent handoff chain.
+"""Multi-agent orchestration runs: the durable record and trace of an agent handoff chain.
 
-The Lambda cannot host a Band websocket listener, so the three agents (Planner, Researcher,
-Reviewer) run as separate long-lived processes (see /agents). This module only stores the run and
-the trace those agents report: each trace entry carries the Band room id and the Band message id
-of a real @mention handoff, so it can be checked against the room transcript on Band.
+The Lambda does not run the agents. The three agents (Planner, Researcher, Reviewer) are nodes in a
+LangGraph chain run by a local worker process (see /agents). This module only stores the run and the
+trace the worker reports: each trace entry carries the LangGraph thread id (the run id) and the step
+id (the graph node) that produced it.
 Agents never approve or send anything: a finished run ends at `awaiting_approval` (human review) or, when a
 lead's missing fact cannot be found, `abstained` (no contact, no draft).
 """
@@ -14,11 +14,25 @@ from persistence import dynamo
 from services import audit
 
 ROLES = ("planner", "researcher", "reviewer")
-KINDS = ("claimed", "room_created", "handoff_sent", "message_received", "work_done", "work_failed", "completed",
+KINDS = ("claimed", "thread_started", "handoff_sent", "message_received", "work_done", "work_failed", "completed",
          "uncertainty_resolved", "abstained")
 STATUSES = ("queued", "planning", "researching", "reviewing", "awaiting_approval", "failed",
             "abstained")
 ACTIVE = ("planning", "researching", "reviewing")
+
+
+def _public(item: dict) -> dict:
+    """Public view of a run. Runs recorded before the move to LangGraph used band_room_id and
+    band_message_id; show those as thread_id and step_id so old runs still display."""
+    run = dynamo.public(item)
+    if run.get("band_room_id") and not run.get("thread_id"):
+        run["thread_id"] = run["band_room_id"]
+    for ev in run.get("trace", []):
+        if ev.get("band_room_id") and not ev.get("thread_id"):
+            ev["thread_id"] = ev["band_room_id"]
+        if ev.get("band_message_id") and not ev.get("step_id"):
+            ev["step_id"] = ev["band_message_id"]
+    return run
 
 
 def create(org_id: str, campaign: dict, lead_id: str, operation_id: str) -> dict:
@@ -41,16 +55,16 @@ def create(org_id: str, campaign: dict, lead_id: str, operation_id: str) -> dict
     dynamo.put_orch(item)
     audit.record(org_id, campaign["id"], "human:founder", "orchestration.requested", rid,
                  {"lead_id": lead_id}, operation_id)
-    return dynamo.public(item)
+    return _public(item)
 
 
 def list_runs(org_id: str, campaign_id: str) -> list[dict]:
-    runs = [dynamo.public(i) for i in dynamo.list_orch(org_id, campaign_id)]
+    runs = [_public(i) for i in dynamo.list_orch(org_id, campaign_id)]
     return sorted(runs, key=lambda r: r["created_at"], reverse=True)
 
 
 def queued(org_id: str) -> list[dict]:
-    return [dynamo.public(i) for i in dynamo.list_orch_by_status(org_id, "queued")]
+    return [_public(i) for i in dynamo.list_orch_by_status(org_id, "queued")]
 
 
 def _get(org_id: str, campaign_id: str, run_id: str) -> dict:
@@ -68,7 +82,7 @@ def claim(org_id: str, campaign_id: str, run_id: str, operation_id: str) -> dict
                                   only_from=("queued",), event=event):
         raise ApiError(409, "already_claimed", "Run is not queued")
     audit.record(org_id, campaign_id, "agent:planner", "orchestration.claimed", run_id, {}, operation_id)
-    return dynamo.public(_get(org_id, campaign_id, run_id))
+    return _public(_get(org_id, campaign_id, run_id))
 
 
 def add_event(org_id: str, campaign_id: str, run_id: str, body: dict, operation_id: str) -> dict:
@@ -86,18 +100,18 @@ def add_event(org_id: str, campaign_id: str, run_id: str, body: dict, operation_
     event = {
         "at": dynamo.now_iso(), "agent": agent, "kind": kind,
         "summary": str(body.get("summary", ""))[:500],
-        "band_room_id": str(body.get("band_room_id", ""))[:80] or None,
-        "band_message_id": str(body.get("band_message_id", ""))[:80] or None,
+        "thread_id": str(body.get("thread_id", ""))[:80] or None,
+        "step_id": str(body.get("step_id", ""))[:80] or None,
         "mentioned": str(body.get("mentioned", ""))[:80] or None,
     }
     fields = {}
-    if body.get("band_room_id"):
-        fields["band_room_id"] = event["band_room_id"]
+    if body.get("thread_id"):
+        fields["thread_id"] = event["thread_id"]
     if body.get("draft_id"):
         fields["draft_id"] = str(body["draft_id"])[:80]
     if status and status != run["status"] and run["status"] in ("failed", "awaiting_approval", "abstained"):
         raise ApiError(409, "run_finished", "Run is already finished")
     dynamo.transition_orch(org_id, campaign_id, run_id, new_status=status, event=event, fields=fields)
     audit.record(org_id, campaign_id, f"agent:{agent}", f"orchestration.{kind}", run_id,
-                 {"band_message_id": event["band_message_id"], "mentioned": event["mentioned"]}, operation_id)
-    return dynamo.public(_get(org_id, campaign_id, run_id))
+                 {"step_id": event["step_id"], "mentioned": event["mentioned"]}, operation_id)
+    return _public(_get(org_id, campaign_id, run_id))

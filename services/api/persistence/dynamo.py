@@ -245,7 +245,7 @@ def put_run(item: dict) -> None:
     table().put_item(Item=to_ddb(item))
 
 
-# ------------------------------------------------- Band orchestration runs
+# ------------------------------------------------- Agent orchestration runs
 def orch_sk(run_id: str) -> str:
     return f"ORCH#{run_id}"
 

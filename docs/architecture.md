@@ -7,9 +7,9 @@ Browser ──> Next.js (apps/web) ──proxy (adds x-gtmos-token)──> API G
            DynamoDB          S3         Anthropic / Tavily / Hunter       Neo4j Aura        Flexprice
         (single table)   (evidence)                                      (graph decisions)  (wallet, 402)
                                                                                  ▲
-Local Band agents (agents/)  ── REST polling + run events ───────────────────────┘
-   Planner ──@mention──> Researcher ──@mention──> Reviewer ──@mention──> Planner
-        └────────── real Band room (api.band.ai / band-sdk websocket) ──────────┘
+Local LangGraph worker (agents/)  ── REST polling + run events ──────────────────┘
+   planner_start ──> researcher ──> reviewer ──> planner_finish
+                         └─ abstain / fail ─> END ─┘
 ```
 
 ## Backend
@@ -33,14 +33,15 @@ check balance (402 if short) → run → idempotent debit + usage event. The wal
 (`gtmos-org-<org>`). Unconfigured: unmetered. Configured but unreachable: 502, fail closed. A debit failure after a
 successful operation is logged as `billing.charge_failed` and does not fail the request.
 
-## Band orchestration
+## Agent orchestration
 
 Run status: `queued → planning → researching → reviewing → awaiting_approval | failed | abstained`. State changes are
-conditional DynamoDB updates (single claim winner; no writes after a run finishes). Each agent is its own process
-with its own Band websocket. A message carries `[gtmos run=… campaign=… lead=…]`, which links the Band message to
-the GTMOS run. An agent only acts on a message from its expected upstream agent, dedupes by message id, and always
-replies or calls `no_reply` so Band does not post a turn error. Lambda cannot hold a websocket, so the agents are
-local processes that call the API for the real work.
+conditional DynamoDB updates (single claim winner; no writes after a run finishes). The Planner, Researcher and
+Reviewer are nodes of one LangGraph (`agents/graph.py`) run by a single worker process (`agents/worker.py`) that polls
+`/api/orchestrations/queued` and claims runs. The LangGraph thread id is the run id, and a node's name is the step id;
+both are stored on each trace event. A node that abstains or fails reports the final status and the conditional edge
+ends the graph; a crash inside a node is caught and recorded as `failed`. The graph uses an in-memory checkpointer, so
+state does not survive a worker restart. The Lambda does not run the agents; the worker calls the API for the real work.
 
 ## Uncertainty resolution
 
